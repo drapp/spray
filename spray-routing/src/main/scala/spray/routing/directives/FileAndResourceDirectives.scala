@@ -26,6 +26,7 @@ import spray.http._
 import HttpHeaders._
 
 trait FileAndResourceDirectives {
+  import ChunkingDirectives._
   import ExecutionDirectives._
   import MethodDirectives._
   import RespondWithDirectives._
@@ -58,13 +59,14 @@ trait FileAndResourceDirectives {
    */
   def getFromFile(file: File, contentType: ContentType)(implicit settings: RoutingSettings,
                                                         refFactory: ActorRefFactory): Route =
-    (get & detach()) {
-      respondWithLastModifiedHeader(file.lastModified) {
+    get {
+      detach() {
         if (file.isFile && file.canRead) {
-          implicit val bufferMarshaller = BasicMarshallers.byteArrayMarshaller(contentType)
-          if (0 < settings.fileChunkingThresholdSize && settings.fileChunkingThresholdSize <= file.length)
-            complete(file.toByteArrayStream(settings.fileChunkingChunkSize.toInt))
-          else complete(FileUtils.readAllBytes(file))
+          respondWithLastModifiedHeader(file.lastModified) {
+            autoChunk(settings.fileChunkingThresholdSize, settings.fileChunkingChunkSize) {
+              complete(HttpEntity(contentType, HttpData(file)))
+            }
+          }
         } else reject
       }
     }
@@ -92,16 +94,19 @@ trait FileAndResourceDirectives {
    */
   def getFromResource(resourceName: String, contentType: ContentType)(implicit refFactory: ActorRefFactory): Route =
     if (!resourceName.endsWith("/"))
-      (get & detach()) {
-        val theClassLoader = actorSystem(refFactory).dynamicAccess.classLoader
-        theClassLoader.getResource(resourceName) match {
-          case null ⇒ reject
-          case url ⇒
-            val lastModified = url.openConnection().getLastModified
-            implicit val bufferMarshaller = BasicMarshallers.byteArrayMarshaller(contentType)
-            respondWithLastModifiedHeader(lastModified) {
-              complete(FileUtils.readAllBytes(theClassLoader.getResourceAsStream(resourceName)))
-            }
+      get {
+        detach() {
+          val theClassLoader = actorSystem(refFactory).dynamicAccess.classLoader
+          theClassLoader.getResource(resourceName) match {
+            case null ⇒ reject
+            case url ⇒
+              val conn = url.openConnection()
+              conn.setUseCaches(false) // otherwise the JDK will keep the JAR file open!
+              implicit val bufferMarshaller = BasicMarshallers.byteArrayMarshaller(contentType)
+              respondWithLastModifiedHeader(conn.getLastModified) {
+                complete(FileUtils.readAllBytes(url.openStream))
+              }
+          }
         }
       }
     else reject // don't serve the content of resource "directories"
@@ -150,7 +155,7 @@ trait FileAndResourceDirectives {
   def getFromBrowseableDirectories(directories: String*)(implicit renderer: Marshaller[DirectoryListing], settings: RoutingSettings,
                                                          resolver: ContentTypeResolver, refFactory: ActorRefFactory): Route = {
     import RouteConcatenation._
-    directories.map(getFromDirectory(_)).reduceLeft(_ ~ _) ~ listDirectoryContents(directories: _*)
+    directories.map(getFromDirectory).reduceLeft(_ ~ _) ~ listDirectoryContents(directories: _*)
   }
 
   /**
@@ -186,12 +191,11 @@ object ContentTypeResolver {
   def withDefaultCharset(charset: HttpCharset): ContentTypeResolver =
     new ContentTypeResolver {
       def apply(fileName: String) = {
-        val mediaType =
-          MediaTypes.forExtension(
-            fileName.lastIndexOf('.') match {
-              case -1 ⇒ ""
-              case x  ⇒ fileName.substring(x + 1)
-            }).getOrElse(MediaTypes.`application/octet-stream`)
+        val ext = fileName.lastIndexOf('.') match {
+          case -1 ⇒ ""
+          case x  ⇒ fileName.substring(x + 1)
+        }
+        val mediaType = MediaTypes.forExtension(ext) getOrElse MediaTypes.`application/octet-stream`
         mediaType match {
           case x if !x.binary ⇒ ContentType(x, charset)
           case x              ⇒ ContentType(x)
