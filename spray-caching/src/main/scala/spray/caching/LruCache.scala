@@ -51,11 +51,11 @@ object LruCache {
  * entries cause old ones to be evicted in a last-recently-used manner, i.e. the entries that haven't been accessed for
  * the longest time are evicted first.
  */
-final class SimpleLruCache[V](val maxCapacity: Int, val initialCapacity: Int) extends Cache[V] {
+class SimpleLruCache[V](val maxCapacity: Int, val initialCapacity: Int) extends Cache[V] {
   require(maxCapacity >= 0, "maxCapacity must not be negative")
   require(initialCapacity <= maxCapacity, "initialCapacity must be <= maxCapacity")
 
-  private[caching] val store = new ConcurrentLinkedHashMap.Builder[Any, Future[V]]
+  protected lazy val store = new ConcurrentLinkedHashMap.Builder[Any, Future[V]]
     .initialCapacity(initialCapacity)
     .maximumWeightedCapacity(maxCapacity)
     .build()
