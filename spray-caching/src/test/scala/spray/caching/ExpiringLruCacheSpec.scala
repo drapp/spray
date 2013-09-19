@@ -78,8 +78,8 @@ class ExpiringLruCacheSpec extends Specification with NoTimeConversions {
     }
     "synchronously call eviction handler for removed elements" in {
       var evicted: Option[Future[String]] = None
-      def onEvict = { value: Future[String] => evicted = Some(value) }
-      val cache = lruCache[String](maxCapacity = 3, initialCapacity = 3, onEvict = Some(onEvict))
+      def onEvict = { value: Future[String] ⇒ evicted = Some(value) }
+      val cache = lruCache[String](maxCapacity = 3, initialCapacity = 3, onEvict = onEvict)
       cache(1)("A").await === "A"
       cache(2)(Future.successful("B")).await === "B"
       cache(3)("C").await === "C"
@@ -88,14 +88,14 @@ class ExpiringLruCacheSpec extends Specification with NoTimeConversions {
       Thread.sleep(10)
       cache.store.toString === "{2=B, 3=C, 4=D}"
       evicted must beSome.like {
-        case future => future.await === "A"
+        case future ⇒ future.await === "A"
       }
       cache.size === 3
     }
     "expire old entries" in {
       var evicted: Option[Future[String]] = None
-      def onEvict = { value: Future[String] => evicted = Some(value) }
-      val cache = lruCache[String](timeToLive = 75 millis span, onEvict = Some(onEvict))
+      def onEvict = { value: Future[String] ⇒ evicted = Some(value) }
+      val cache = lruCache[String](timeToLive = 75 millis span, onEvict = onEvict)
       cache(1)("A").await === "A"
       cache(2)("B").await === "B"
       Thread.sleep(50)
@@ -105,7 +105,7 @@ class ExpiringLruCacheSpec extends Specification with NoTimeConversions {
       Thread.sleep(50)
       cache.get(2) must beNone // removed on request
       evicted must beSome.like {
-        case future => future.await === "B"
+        case future ⇒ future.await === "B"
       }
       cache.size === 2 // expired entry 1 still there
       cache.get(1) must beNone // but not retrievable anymore
@@ -153,7 +153,7 @@ class ExpiringLruCacheSpec extends Specification with NoTimeConversions {
   step(system.shutdown())
 
   def lruCache[T](maxCapacity: Int = 500, initialCapacity: Int = 16,
-                  timeToLive: Duration = Duration.Zero, timeToIdle: Duration = Duration.Zero, onEvict: Option[Future[T] => Unit] = None) =
+                  timeToLive: Duration = Duration.Zero, timeToIdle: Duration = Duration.Zero, onEvict: Future[T] ⇒ Unit = LruCache.EmptyEvictionHandler) =
     new ExpiringLruCache[T](maxCapacity, initialCapacity, timeToLive.toMillis, timeToIdle.toMillis, onEvict)
 
 }

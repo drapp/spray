@@ -74,7 +74,7 @@ class SimpleLruCacheSpec extends Specification with NoTimeConversions {
     "synchronously call eviction handler for removed elements" in {
       var evicted: Option[Future[String]] = None
       def onEvict = { value: Future[String] ⇒ evicted = Some(value) }
-      val cache = lruCache[String](maxCapacity = 3, initialCapacity = 3, onEvict = Some(onEvict))
+      val cache = lruCache[String](maxCapacity = 3, initialCapacity = 3, onEvict = onEvict)
       cache(1)("A").await === "A"
       cache(2)(Future.successful("B")).await === "B"
       cache(3)("C").await === "C"
@@ -119,7 +119,7 @@ class SimpleLruCacheSpec extends Specification with NoTimeConversions {
 
   step(system.shutdown())
 
-  def lruCache[T](maxCapacity: Int = 500, initialCapacity: Int = 16, onEvict: Option[Future[T] ⇒ Unit] = None) =
+  def lruCache[T](maxCapacity: Int = 500, initialCapacity: Int = 16, onEvict: Future[T] ⇒ Unit = LruCache.EmptyEvictionHandler) =
     new SimpleLruCache[T](maxCapacity, initialCapacity, onEvict)
 
 }

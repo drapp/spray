@@ -16,7 +16,7 @@
 
 package spray.caching
 
-import com.googlecode.concurrentlinkedhashmap.{EvictionListener, ConcurrentLinkedHashMap}
+import com.googlecode.concurrentlinkedhashmap.{ EvictionListener, ConcurrentLinkedHashMap }
 import scala.annotation.tailrec
 import scala.concurrent.duration.Duration
 import scala.concurrent.{ Promise, ExecutionContext, Future }
@@ -24,31 +24,26 @@ import scala.util.{ Failure, Success }
 
 object LruCache {
 
+  val EmptyEvictionHandler: Future[Any] ⇒ Unit = _ ⇒ ()
+
   //# source-quote-LruCache-apply
   /**
    * Creates a new [[spray.caching.ExpiringLruCache]] or
    * [[spray.caching.SimpleLruCache]] instance depending on whether
    * a non-zero and finite timeToLive and/or timeToIdle is set or not.
    */
+  def withEvictionHandler[V](maxCapacity: Int = 500,
+                             initialCapacity: Int = 16,
+                             timeToLive: Duration = Duration.Zero,
+                             timeToIdle: Duration = Duration.Zero)(onEvict: Future[V] ⇒ Unit): Cache[V] = {
+    LruCache(maxCapacity, initialCapacity, timeToLive, timeToIdle, onEvict)
+  }
+
   def apply[V](maxCapacity: Int = 500,
                initialCapacity: Int = 16,
                timeToLive: Duration = Duration.Zero,
-               timeToIdle: Duration = Duration.Zero): Cache[V] = {
-    LruCache.apply(maxCapacity, initialCapacity, timeToLive, timeToIdle, None)
-  }
-
-  def withEvictHandler[V](maxCapacity: Int = 500,
-                          initialCapacity: Int = 16,
-                          timeToLive: Duration = Duration.Zero,
-                          timeToIdle: Duration = Duration.Zero)(onEvict: Future[V] => Unit): Cache[V] = {
-    LruCache(maxCapacity, initialCapacity, timeToLive, timeToIdle, Some(onEvict))
-  }
-
-  private def apply[V](maxCapacity: Int,
-                       initialCapacity: Int,
-                       timeToLive: Duration,
-                       timeToIdle: Duration,
-                       onEvict: Option[Future[V] => Unit]): Cache[V] = {
+               timeToIdle: Duration = Duration.Zero,
+               onEvict: Future[V] ⇒ Unit = EmptyEvictionHandler): Cache[V] = {
     //#
     import Duration._
     def isNonZeroFinite(d: Duration) = d != Zero && d.isFinite
@@ -62,10 +57,8 @@ object LruCache {
 
 private[caching] trait EvictionHandler[V] {
 
-  private[caching] def evictionListener[T](toFuture: T => Future[V], onEvict: Future[V] => Unit) = new EvictionListener[Any, T] {
-    def onEviction(key: Any, value: T) {
-      onEvict(toFuture(value))
-    }
+  private[caching] def evictionListener[T](toFuture: T ⇒ Future[V], onEvict: Future[V] ⇒ Unit) = new EvictionListener[Any, T] {
+    def onEviction(key: Any, value: T): Unit = onEvict(toFuture(value))
   }
 }
 
@@ -76,21 +69,22 @@ private[caching] trait EvictionHandler[V] {
  * the longest time are evicted first. If specified, the onEvict handler will be called on any entries evicted in this manner
  * (but not on entries removed normally).
  */
-final class SimpleLruCache[V](val maxCapacity: Int, val initialCapacity: Int, onEvict: Option[Future[V] => Unit] = None) extends Cache[V] with EvictionHandler[V] {
+final class SimpleLruCache[V](val maxCapacity: Int, val initialCapacity: Int, onEvict: Future[V] ⇒ Unit = LruCache.EmptyEvictionHandler) extends Cache[V] with EvictionHandler[V] {
   require(maxCapacity >= 0, "maxCapacity must not be negative")
   require(initialCapacity <= maxCapacity, "initialCapacity must be <= maxCapacity")
 
   private[caching] lazy val store = {
-    val baseBuilder = new ConcurrentLinkedHashMap.Builder[Any, Future[V]]
+    val builder = new ConcurrentLinkedHashMap.Builder[Any, Future[V]]
       .initialCapacity(initialCapacity)
       .maximumWeightedCapacity(maxCapacity)
 
-    val builderWithEvict = onEvict.map { evictionFunction =>
-      val listener = evictionListener[Future[V]](identity, evictionFunction)
-      baseBuilder.listener(listener)
-    } getOrElse baseBuilder
+    // don't bother adding a noop handler
+    if (onEvict != LruCache.EmptyEvictionHandler) {
+      val listener = evictionListener[Future[V]](identity, onEvict)
+      builder.listener(listener)
+    }
 
-    builderWithEvict.build()
+    builder.build()
   }
 
   def get(key: Any) = Option(store.get(key))
@@ -135,21 +129,24 @@ final class SimpleLruCache[V](val maxCapacity: Int, val initialCapacity: Int, on
  * @param timeToIdle the time-to-idle in millis, zero for disabling tti-expiration
  */
 final class ExpiringLruCache[V](maxCapacity: Long, initialCapacity: Int,
-                                timeToLive: Long, timeToIdle: Long, onEvict: Option[Future[V] => Unit] = None) extends Cache[V] with EvictionHandler[V] {
+                                timeToLive: Long, timeToIdle: Long, onEvict: Future[V] ⇒ Unit = LruCache.EmptyEvictionHandler) extends Cache[V] with EvictionHandler[V] {
   require(timeToLive >= 0, "timeToLive must not be negative")
   require(timeToIdle >= 0, "timeToIdle must not be negative")
   require(timeToLive == 0 || timeToIdle == 0 || timeToLive > timeToIdle,
     "timeToLive must be greater than timeToIdle, if both are non-zero")
 
   private[caching] val store = {
-    val baseBuilder = new ConcurrentLinkedHashMap.Builder[Any, Entry[V]]
+    val builder = new ConcurrentLinkedHashMap.Builder[Any, Entry[V]]
       .initialCapacity(initialCapacity)
       .maximumWeightedCapacity(maxCapacity)
-    val builderWithEvict = onEvict.map { evictionFunction =>
-      val listener = evictionListener[Entry[V]](_.future, evictionFunction)
-      baseBuilder.listener(listener)
-    } getOrElse baseBuilder
-    builderWithEvict.build()
+
+    // don't bother adding a noop handler
+    if (onEvict != LruCache.EmptyEvictionHandler) {
+      val listener = evictionListener[Entry[V]](_.future, onEvict)
+      builder.listener(listener)
+    }
+
+    builder.build()
   }
 
   @tailrec
@@ -161,7 +158,7 @@ final class ExpiringLruCache[V](maxCapacity: Long, initialCapacity: Int,
     case entry ⇒
       // remove entry, but only if it hasn't been removed and reinserted in the meantime
       if (store.remove(key, entry)) {
-        onEvict.foreach(_(entry.future))
+        onEvict(entry.future)
         None
       } // successfully removed
       else get(key) // nope, try again
@@ -181,7 +178,7 @@ final class ExpiringLruCache[V](maxCapacity: Long, initialCapacity: Int,
               newEntry.created = entry.created
               entry.future
             } else {
-              onEvict.foreach(_(entry.future))
+              onEvict(entry.future)
               genValue()
             }
         }
