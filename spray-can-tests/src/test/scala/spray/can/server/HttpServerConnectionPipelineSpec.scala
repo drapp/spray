@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011-2013 spray.io
+ * Copyright © 2011-2013 the spray project <http://spray.io>
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -32,9 +32,8 @@ import spray.can.Http
 import spray.http._
 import spray.can.TestSupport._
 import HttpHeaders._
-import MediaTypes._
 
-class HttpServerConnectionPipelineSpec extends Specification with RawSpecs2PipelineStageTest {
+private class HttpServerConnectionPipelineSpec extends Specification with RawSpecs2PipelineStageTest {
   type Context = ServerFrontend.Context with SslTlsContext
 
   "The HttpServer pipeline" should {
@@ -58,7 +57,7 @@ class HttpServerConnectionPipelineSpec extends Specification with RawSpecs2Pipel
           `Transfer-Encoding`("chunked"),
           `Content-Type`(ContentTypes.`text/plain(UTF-8)`),
           `Host`("test.com")),
-        entity = HttpEntity("body123body123"))
+        entity = HttpEntity(ContentTypes.`text/plain(UTF-8)`, HttpData("body123") +: HttpData("body123")))
     }
 
     "dispatch Ack messages" in {
@@ -310,7 +309,8 @@ class HttpServerConnectionPipelineSpec extends Specification with RawSpecs2Pipel
       message === HttpRequest(uri = "http://test.com/", headers = List(`Host`("test.com")))
 
       val probe = TestProbe()
-      requestSender.tell(Http.MessageCommand(ChunkedResponseStart(HttpResponse(entity = "1234567"))), probe.ref)
+      val responseStart = ChunkedResponseStart(HttpResponse(entity = "1234567"))
+      requestSender.tell(Http.MessageCommand(responseStart), probe.ref)
       val Tcp.Write(StringBytes(data), ack) = commands.expectMsgType[Tcp.Write]
       wipeDate(data) === prep {
         """HTTP/1.1 200 OK
@@ -321,7 +321,7 @@ class HttpServerConnectionPipelineSpec extends Specification with RawSpecs2Pipel
           |
           |"""
       }
-      ack === AckEventWithReceiver(Http.Closed, probe.ref)
+      ack === AckEventWithReceiver(Http.Closed, responseStart, probe.ref)
     }
 
     "dispatch Timeout messages in case of a request timeout (and dispatch respective response)" in new MyFixture() {

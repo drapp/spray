@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011-2013 spray.io
+ * Copyright © 2011-2013 the spray project <http://spray.io>
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -26,6 +26,7 @@ import AuthenticationFailedRejection._
 class SecurityDirectivesSpec extends RoutingSpec {
 
   val dontAuth = BasicAuth(UserPassAuthenticator[BasicUserContext](_ ⇒ Future.successful(None)), "Realm")
+  val challenge = `WWW-Authenticate`(HttpChallenge("Basic", "Realm"))
 
   val doAuth = BasicAuth(UserPassAuthenticator[BasicUserContext] { userPassOption ⇒
     Future.successful(Some(BasicUserContext(userPassOption.get.user)))
@@ -35,25 +36,25 @@ class SecurityDirectivesSpec extends RoutingSpec {
     "reject requests without Authorization header with an AuthenticationFailedRejection" in {
       Get() ~> {
         authenticate(dontAuth) { echoComplete }
-      } ~> check { rejection === AuthenticationFailedRejection(CredentialsMissing, dontAuth) }
+      } ~> check { rejection === AuthenticationFailedRejection(CredentialsMissing, List(challenge)) }
     }
     "reject unauthenticated requests with Authorization header with an AuthenticationFailedRejection" in {
       Get() ~> Authorization(BasicHttpCredentials("Bob", "")) ~> {
         authenticate(dontAuth) { echoComplete }
-      } ~> check { rejection === AuthenticationFailedRejection(CredentialsRejected, dontAuth) }
+      } ~> check { rejection === AuthenticationFailedRejection(CredentialsRejected, List(challenge)) }
     }
     "reject requests with illegal Authorization header with 401" in {
       Get() ~> RawHeader("Authorization", "bob alice") ~> handleRejections(RejectionHandler.Default) {
         authenticate(dontAuth) { echoComplete }
       } ~> check {
         status === StatusCodes.Unauthorized and
-          entityAs[String] === "The resource requires authentication, which was not supplied with the request"
+          responseAs[String] === "The resource requires authentication, which was not supplied with the request"
       }
     }
     "extract the object representing the user identity created by successful authentication" in {
       Get() ~> Authorization(BasicHttpCredentials("Alice", "")) ~> {
         authenticate(doAuth) { echoComplete }
-      } ~> check { entityAs[String] === "BasicUserContext(Alice)" }
+      } ~> check { responseAs[String] === "BasicUserContext(Alice)" }
     }
     "properly handle exceptions thrown in its inner route" in {
       object TestException extends spray.util.SingletonException
@@ -77,7 +78,7 @@ class SecurityDirectivesSpec extends RoutingSpec {
     }
     "pass on the authenticator extraction if the filter conditions is met" in {
       Get() ~> Host("spray.io") ~> authenticate(myAuthenticator) { echoComplete } ~>
-        check { entityAs[String] === "42" }
+        check { responseAs[String] === "42" }
     }
   }
 }

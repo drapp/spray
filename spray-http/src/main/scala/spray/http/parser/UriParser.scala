@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011-2013 spray.io
+ * Copyright © 2011-2013 the spray project <http://spray.io>
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -67,6 +67,11 @@ private[http] class UriParser(input: ParserInput, charset: Charset, mode: Uri.Pa
     resolve(_scheme, _userinfo, _host, _port, _path, _query, _fragment, base)
   }
 
+  def parseOrigin(): HttpOrigin = {
+    complete("origin", origin)
+    HttpOrigin(_scheme, HttpHeaders.Host(_host.address, _port))
+  }
+
   def URI =
     scheme && ch(':') && `hier-part` && {
       val mark = cursor
@@ -75,6 +80,8 @@ private[http] class UriParser(input: ParserInput, charset: Charset, mode: Uri.Pa
       val mark = cursor
       ch('#') && fragment || reset(mark)
     }
+
+  def origin = scheme && ch(':') && ch('/') && ch('/') && hostAndPort
 
   def `hier-part` = {
     val mark = cursor
@@ -126,10 +133,7 @@ private[http] class UriParser(input: ParserInput, charset: Charset, mode: Uri.Pa
 
   def authority = {
     val mark = cursor
-    (userinfo || reset(mark)) && host && {
-      val mark = cursor
-      ch(':') && port || reset(mark)
-    }
+    (userinfo || reset(mark)) && hostAndPort
   }
 
   def userinfo = {
@@ -143,6 +147,12 @@ private[http] class UriParser(input: ParserInput, charset: Charset, mode: Uri.Pa
       true
     }
   }
+
+  def hostAndPort =
+    host && {
+      val mark = cursor
+      ch(':') && port || reset(mark)
+    }
 
   def host = {
     val mark = cursor
@@ -302,7 +312,7 @@ private[http] class UriParser(input: ParserInput, charset: Charset, mode: Uri.Pa
     // putting some pressure onto the JVM stack
     def readKVP(): Query = {
       val key = part
-      val value = if (ch('=')) part else ""
+      val value = if (ch('=')) part else Query.EmptyValue
       val tail = if (ch('&')) readKVP() else Query.Empty
       Query.Cons(key, value, tail)
     }

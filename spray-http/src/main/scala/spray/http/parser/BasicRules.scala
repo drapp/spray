@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011-2013 spray.io
+ * Copyright © 2011-2013 the spray project <http://spray.io>
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -19,6 +19,7 @@ package parser
 
 import java.lang.{ StringBuilder ⇒ JStringBuilder }
 import org.parboiled.scala._
+import spray.util.identityFunc
 
 // direct implementation of http://www.w3.org/Protocols/rfc2616/rfc2616-sec2.html#sec2
 private[parser] object BasicRules extends Parser {
@@ -49,7 +50,7 @@ private[parser] object BasicRules extends Parser {
 
   def Separator = rule { anyOf("()<>@,;:\\\"/[]?={} \t") }
 
-  def Token: Rule1[String] = rule { oneOrMore(!CTL ~ !Separator ~ ANY) ~> identityFunc }
+  def Token: Rule1[String] = rule { oneOrMore(TokenChar) ~> identityFunc }
 
   // contrary to the spec we do not allow nested comments
   def Comment = rule {
@@ -64,6 +65,8 @@ private[parser] object BasicRules extends Parser {
     ("\\" ~ Char | !excluded ~ Text) ~ toRunAction(c ⇒ c.getValueStack.peek.asInstanceOf[JStringBuilder].append(c.getFirstMatchChar))
 
   // helpers
+
+  def TokenChar = rule { !CTL ~ !Separator ~ ANY }
 
   def OptWS = rule { zeroOrMore(LWS) }
 

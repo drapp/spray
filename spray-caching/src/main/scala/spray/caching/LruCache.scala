@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011-2013 spray.io
+ * Copyright © 2011-2013 the spray project <http://spray.io>
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -21,6 +21,7 @@ import scala.annotation.tailrec
 import scala.concurrent.duration.Duration
 import scala.concurrent.{ Promise, ExecutionContext, Future }
 import scala.util.{ Failure, Success }
+import spray.util.Timestamp
 
 object LruCache {
 
@@ -34,31 +35,29 @@ object LruCache {
    */
   def withEvictionHandler[V](maxCapacity: Int = 500,
                              initialCapacity: Int = 16,
-                             timeToLive: Duration = Duration.Zero,
-                             timeToIdle: Duration = Duration.Zero)(onEvict: Future[V] ⇒ Unit): Cache[V] = {
+                             timeToLive: Duration = Duration.Inf,
+                             timeToIdle: Duration = Duration.Inf)(onEvict: Future[V] ⇒ Unit): Cache[V] = {
     LruCache(maxCapacity, initialCapacity, timeToLive, timeToIdle, onEvict)
   }
 
   def apply[V](maxCapacity: Int = 500,
                initialCapacity: Int = 16,
-               timeToLive: Duration = Duration.Zero,
-               timeToIdle: Duration = Duration.Zero,
+               timeToLive: Duration = Duration.Inf,
+               timeToIdle: Duration = Duration.Inf,
                onEvict: Future[V] ⇒ Unit = EmptyEvictionHandler): Cache[V] = {
     //#
-    import Duration._
-    def isNonZeroFinite(d: Duration) = d != Zero && d.isFinite
-    def millis(d: Duration) = if (isNonZeroFinite(d)) d.toMillis else 0L
-    if (isNonZeroFinite(timeToLive) || isNonZeroFinite(timeToIdle))
-      new ExpiringLruCache[V](maxCapacity, initialCapacity, millis(timeToLive), millis(timeToIdle))
+    def check(dur: Duration, name: String) =
+      require(dur != Duration.Zero,
+        s"Behavior of LruCache.apply changed: Duration.Zero not allowed any more for $name parameter. To disable " +
+          "expiration use Duration.Inf instead of Duration.Zero")
+    // migration help
+    check(timeToLive, "timeToLive")
+    check(timeToIdle, "timeToIdle")
+
+    if (timeToLive.isFinite() || timeToIdle.isFinite())
+      new ExpiringLruCache[V](maxCapacity, initialCapacity, timeToLive, timeToIdle)
     else
       new SimpleLruCache[V](maxCapacity, initialCapacity, onEvict)
-  }
-}
-
-private[caching] trait EvictionHandler[V] {
-
-  private[caching] def evictionListener[T](toFuture: T ⇒ Future[V], onEvict: Future[V] ⇒ Unit) = new EvictionListener[Any, T] {
-    def onEviction(key: Any, value: T): Unit = onEvict(toFuture(value))
   }
 }
 
@@ -69,7 +68,7 @@ private[caching] trait EvictionHandler[V] {
  * the longest time are evicted first. If specified, the onEvict handler will be called on any entries evicted in this manner
  * (but not on entries removed normally).
  */
-final class SimpleLruCache[V](val maxCapacity: Int, val initialCapacity: Int, onEvict: Future[V] ⇒ Unit = LruCache.EmptyEvictionHandler) extends Cache[V] with EvictionHandler[V] {
+final class SimpleLruCache[V](val maxCapacity: Int, val initialCapacity: Int, onEvict: Future[V] ⇒ Unit = LruCache.EmptyEvictionHandler) extends Cache[V] {
   require(maxCapacity >= 0, "maxCapacity must not be negative")
   require(initialCapacity <= maxCapacity, "initialCapacity must be <= maxCapacity")
 
@@ -80,7 +79,9 @@ final class SimpleLruCache[V](val maxCapacity: Int, val initialCapacity: Int, on
 
     // don't bother adding a noop handler
     if (onEvict != LruCache.EmptyEvictionHandler) {
-      val listener = evictionListener[Future[V]](identity, onEvict)
+      val listener = new EvictionListener[Any, Future[V]] {
+        def onEviction(key: Any, value: Future[V]): Unit = onEvict(value)
+      }
       builder.listener(listener)
     }
 
@@ -129,11 +130,9 @@ final class SimpleLruCache[V](val maxCapacity: Int, val initialCapacity: Int, on
  * @param timeToIdle the time-to-idle in millis, zero for disabling tti-expiration
  */
 final class ExpiringLruCache[V](maxCapacity: Long, initialCapacity: Int,
-                                timeToLive: Long, timeToIdle: Long, onEvict: Future[V] ⇒ Unit = LruCache.EmptyEvictionHandler) extends Cache[V] with EvictionHandler[V] {
-  require(timeToLive >= 0, "timeToLive must not be negative")
-  require(timeToIdle >= 0, "timeToIdle must not be negative")
-  require(timeToLive == 0 || timeToIdle == 0 || timeToLive > timeToIdle,
-    "timeToLive must be greater than timeToIdle, if both are non-zero")
+                                timeToLive: Duration, timeToIdle: Duration, onEvict: Future[V] ⇒ Unit = LruCache.EmptyEvictionHandler) extends Cache[V] {
+  require(!timeToLive.isFinite || !timeToIdle.isFinite || timeToLive > timeToIdle,
+    s"timeToLive($timeToLive) must be greater than timeToIdle($timeToIdle)")
 
   private[caching] val store = {
     val builder = new ConcurrentLinkedHashMap.Builder[Any, Entry[V]]
@@ -142,7 +141,9 @@ final class ExpiringLruCache[V](maxCapacity: Long, initialCapacity: Int,
 
     // don't bother adding a noop handler
     if (onEvict != LruCache.EmptyEvictionHandler) {
-      val listener = evictionListener[Entry[V]](_.future, onEvict)
+      val listener = new EvictionListener[Any, Entry[V]] {
+        def onEviction(key: Any, value: Entry[V]): Unit = onEvict(value.future)
+      }
       builder.listener(listener)
     }
 
@@ -208,20 +209,18 @@ final class ExpiringLruCache[V](maxCapacity: Long, initialCapacity: Int,
 
   def size = store.size
 
-  private def isAlive(entry: Entry[V]) = {
-    val now = System.currentTimeMillis
-    (timeToLive == 0 || (now - entry.created) < timeToLive) &&
-      (timeToIdle == 0 || (now - entry.lastAccessed) < timeToIdle)
-  }
+  private def isAlive(entry: Entry[V]) =
+    (entry.created + timeToLive).isFuture &&
+      (entry.lastAccessed + timeToIdle).isFuture
 }
 
 private[caching] class Entry[T](val promise: Promise[T]) {
-  @volatile var created = System.currentTimeMillis
-  @volatile var lastAccessed = System.currentTimeMillis
+  @volatile var created = Timestamp.now
+  @volatile var lastAccessed = Timestamp.now
   def future = promise.future
   def refresh(): Unit = {
     // we dont care whether we overwrite a potentially newer value
-    lastAccessed = System.currentTimeMillis
+    lastAccessed = Timestamp.now
   }
   override def toString = future.value match {
     case Some(Success(value))     ⇒ value.toString

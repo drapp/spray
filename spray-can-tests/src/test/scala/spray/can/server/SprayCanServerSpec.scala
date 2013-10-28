@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011-2013 spray.io
+ * Copyright © 2011-2013 the spray project <http://spray.io>
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -23,7 +23,7 @@ import scala.annotation.tailrec
 import scala.concurrent.duration._
 import org.specs2.mutable.Specification
 import org.specs2.time.NoTimeConversions
-import akka.actor.{ ActorRef, ActorSystem }
+import akka.actor.{ Terminated, ActorRef, ActorSystem }
 import akka.io.IO
 import akka.testkit.TestProbe
 import spray.can.Http
@@ -31,6 +31,8 @@ import spray.util.Utils.temporaryServerHostnameAndPort
 import spray.httpx.RequestBuilding._
 import spray.http._
 import HttpProtocols._
+import spray.can.Http.RegisterChunkHandler
+import spray.can.client.ClientConnectionSettings
 
 class SprayCanServerSpec extends Specification with NoTimeConversions {
   val testConf: Config = ConfigFactory.parseString("""
@@ -40,6 +42,8 @@ class SprayCanServerSpec extends Specification with NoTimeConversions {
       io.tcp.trace-logging = off
     }
     spray.can.server.request-chunk-aggregation-limit = 0
+    spray.can.server.pipelining-limit = 4
+    spray.can.server.verbose-error-messages = on
     spray.can.client.response-chunk-aggregation-limit = 0""")
   implicit val system = ActorSystem(getClass.getSimpleName, testConf)
 
@@ -49,6 +53,31 @@ class SprayCanServerSpec extends Specification with NoTimeConversions {
       val commander = TestProbe()
       commander.send(listener, Http.Unbind)
       commander expectMsg Http.Unbound
+    }
+    "properly bind and unbind an HttpListener with graceperiod" in new TestSetup {
+      val commander = TestProbe()
+      val clientTerminationWatcher = TestProbe()
+      val serverTerminationWatcher = TestProbe()
+
+      val clientSettings = ClientConnectionSettings {
+        """spray.can.client.idleTimeout = infinite
+          |spray.can.client.requestTimeout = infinite
+        """.stripMargin
+      }
+
+      val connection = openNewClientConnection(Some(clientSettings))
+      val serverSide = acceptConnection()
+      clientTerminationWatcher.watch(connection)
+      serverTerminationWatcher.watch(listener)
+      commander.send(listener, Http.Unbind(10.minutes))
+      commander expectMsg Http.Unbound
+      commander.expectNoMsg()
+      clientTerminationWatcher.expectNoMsg()
+      serverTerminationWatcher.expectNoMsg()
+
+      connection ! Http.Close
+      clientTerminationWatcher.expectMsgType[Terminated].actor === connection
+      serverTerminationWatcher.expectMsgType[Terminated].actor === listener
     }
 
     "properly complete a simple request/response cycle" in new TestSetup {
@@ -69,21 +98,27 @@ class SprayCanServerSpec extends Specification with NoTimeConversions {
       val probe = sendRequest(connection, ChunkedRequestStart(Get("/abc")))
       serverHandler.expectMsgType[ChunkedRequestStart].request.uri === Uri(s"http://$hostname:$port/abc")
       probe.send(connection, MessageChunk("123"))
-      probe.send(connection, MessageChunk("456"))
-      serverHandler.expectMsg(MessageChunk("123"))
-      serverHandler.expectMsg(MessageChunk("456"))
-      probe.send(connection, ChunkedMessageEnd)
-      serverHandler.expectMsg(ChunkedMessageEnd)
 
-      serverHandler.reply(ChunkedResponseStart(HttpResponse(entity = "yeah")))
-      serverHandler.reply(MessageChunk("234"))
-      serverHandler.reply(MessageChunk("345"))
-      serverHandler.reply(ChunkedMessageEnd)
-      probe.expectMsgType[ChunkedResponseStart].response.entity === EmptyEntity
+      val chunkHandler = TestProbe()
+      serverHandler.reply(RegisterChunkHandler(chunkHandler.ref))
+
+      probe.send(connection, MessageChunk("456"))
+
+      chunkHandler.expectMsg(MessageChunk("123"))
+      chunkHandler.expectMsg(MessageChunk("456"))
+      probe.send(connection, ChunkedMessageEnd)
+      chunkHandler.expectMsg(ChunkedMessageEnd)
+
+      chunkHandler.reply(ChunkedResponseStart(HttpResponse(entity = "yeah")))
+      chunkHandler.reply(MessageChunk("234"))
+      chunkHandler.reply(MessageChunk("345"))
+      chunkHandler.reply(ChunkedMessageEnd)
+      probe.expectMsgType[ChunkedResponseStart].response.entity === HttpEntity.Empty
       probe.expectMsg(MessageChunk("yeah"))
       probe.expectMsg(MessageChunk("234"))
       probe.expectMsg(MessageChunk("345"))
       probe.expectMsg(ChunkedMessageEnd)
+      serverHandler.expectNoMsg()
     }
 
     "maintain response order for pipelined requests" in new TestSetup {
@@ -108,11 +143,11 @@ class SprayCanServerSpec extends Specification with NoTimeConversions {
           val socket = openClientSocket()
           val serverHandler = acceptConnection()
           val writer = write(socket, request + "\r\n\r\n")
-          serverHandler.expectMsg(Http.Closed)
           val (text, reader) = readAll(socket)()
-          text must startWith("HTTP/1.1 400 Bad Request")
-          text must endWith(errorMsg)
           socket.close()
+          serverHandler.expectMsg(Http.ConfirmedClosed)
+          text must startWith("HTTP/1.1 400 Bad Request")
+          text.takeRight(errorMsg.length) === errorMsg
         }
       "when an HTTP/1.1 request has no Host header" in errorTest(
         request = "GET / HTTP/1.1",
@@ -128,10 +163,18 @@ class SprayCanServerSpec extends Specification with NoTimeConversions {
         errorMsg = "Cannot establish effective request URI, request has a relative URI and an empty `Host` header")
       "when the request has an ill-formed URI" in errorTest(
         request = "GET http://host:naaa HTTP/1.1",
-        errorMsg = "Illegal request-target, unexpected end-of-input at position 16")
+        errorMsg =
+          """Illegal request-target, unexpected end-of-input at position 16:\u0020
+            |http://host:naaa
+            |                ^
+            |""".stripMargin)
       "when the request has an URI with a fragment" in errorTest(
         request = "GET /path?query#fragment HTTP/1.1",
-        errorMsg = "Illegal request-target, unexpected character '#' at position 11")
+        errorMsg =
+          """Illegal request-target, unexpected character '#' at position 11:\u0020
+            |/path?query#fragment
+            |           ^
+            |""".stripMargin)
       "when the request has an absolute URI without authority part and a non-empty host header" in errorTest(
         request = "GET http:/foo HTTP/1.1\r\nHost: spray.io",
         errorMsg = "'Host' header value doesn't match request target authority")
@@ -224,9 +267,9 @@ class SprayCanServerSpec extends Specification with NoTimeConversions {
       commander.sender
     }
 
-    def openNewClientConnection(): ActorRef = {
+    def openNewClientConnection(settings: Option[ClientConnectionSettings] = None): ActorRef = {
       val probe = TestProbe()
-      probe.send(IO(Http), Http.Connect(hostname, port))
+      probe.send(IO(Http), Http.Connect(hostname, port, settings = settings))
       probe.expectMsgType[Http.Connected]
       probe.sender
     }

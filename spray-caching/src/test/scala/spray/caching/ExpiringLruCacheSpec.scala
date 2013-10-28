@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011-2013 spray.io
+ * Copyright © 2011-2013 the spray project <http://spray.io>
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -44,7 +44,7 @@ class ExpiringLruCacheSpec extends Specification with NoTimeConversions {
     "return stored values upon cache hit on existing values" in {
       val cache = lruCache[String]()
       cache(1)("A").await === "A"
-      cache(1)(failure("Cached expression was evaluated despite a cache hit"): String).await === "A"
+      cache(1)(failure("Cached expression was evaluated despite a cache hit").asInstanceOf[String]).await === "A"
       cache.store.toString === "{1=A}"
       cache.size === 1
     }
@@ -153,7 +153,7 @@ class ExpiringLruCacheSpec extends Specification with NoTimeConversions {
   step(system.shutdown())
 
   def lruCache[T](maxCapacity: Int = 500, initialCapacity: Int = 16,
-                  timeToLive: Duration = Duration.Zero, timeToIdle: Duration = Duration.Zero, onEvict: Future[T] ⇒ Unit = LruCache.EmptyEvictionHandler) =
-    new ExpiringLruCache[T](maxCapacity, initialCapacity, timeToLive.toMillis, timeToIdle.toMillis, onEvict)
+                  timeToLive: Duration = Duration.Inf, timeToIdle: Duration = Duration.Inf, onEvict: Future[T] ⇒ Unit = LruCache.EmptyEvictionHandler) =
+    new ExpiringLruCache[T](maxCapacity, initialCapacity, timeToLive, timeToIdle, onEvict)
 
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011-2013 spray.io
+ * Copyright © 2011-2013 the spray project <http://spray.io>
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -164,6 +164,10 @@ class HttpHeaderParserSpec extends Specification {
 
     "parse and cache a modelled header" in new TestSetup() {
       parseAndCache("Host: spray.io:123\r\nx")("HOST: spray.io:123\r\nx") === Host("spray.io", 123)
+    }
+
+    "parse and cache an invalid modelled header as RawHeader" in new TestSetup() {
+      parseAndCache("Content-Type: abc:123\r\nx")() === RawHeader("Content-Type", "abc:123")
     }
 
     "parse and cache a raw header" in new TestSetup(primed = false) {

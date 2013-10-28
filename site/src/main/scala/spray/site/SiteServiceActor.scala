@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011-2013 spray.io
+ * Copyright © 2011-2013 the spray project <http://spray.io>
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -32,7 +32,7 @@ class SiteServiceActor(settings: SiteSettings) extends HttpServiceActor {
   // format: OFF
   def receive = runRoute {
     dynamicIf(settings.devMode) { // for proper support of twirl + sbt-revolver during development
-      (get & encodeResponse(Gzip)) {
+      (get & compressResponse()) {
         host("repo.spray.io") {
           logRequestResponse(showRepoResponses("repo") _) {
             getFromBrowseableDirectories(settings.repoDirs: _*) ~
@@ -63,9 +63,21 @@ class SiteServiceActor(settings: SiteSettings) extends HttpServiceActor {
             pathPrefix("_images") {
               getFromResourceDirectory("sphinx/json/_images")
             } ~
+            pathPrefix("scala.io") {
+              path("") {
+                getFromResource("scala.io/index.html")
+              } ~
+              getFromResourceDirectory("scala.io")
+            } ~
             logRequest(showRequest _) {
               path("") {
                 complete(page(home()))
+              } ~
+              pathPrefix("documentation" / Segment / "api") { version =>
+                val dir = "api/"+version+"/"
+                rawPathPrefix(Slash ~ PathEnd)(getFromResource(dir+"index.html")) ~
+                getFromResourceDirectory(dir) ~
+                path("")(redirect("/documentation/"+version+"/api/", MovedPermanently))
               } ~
               pathSuffixTest(Slash) {
                 path("home") {

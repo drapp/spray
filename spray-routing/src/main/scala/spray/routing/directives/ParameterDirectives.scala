@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011-2013 spray.io
+ * Copyright © 2011-2013 the spray project <http://spray.io>
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -25,20 +25,17 @@ trait ParameterDirectives extends ToNameReceptaclePimps {
   /**
    * Extracts the requests query parameters as a Map[String, String].
    */
-  def parameterMap: Directive[Map[String, String] :: HNil] =
-    BasicDirectives.extract(_.request.uri.query.toMap)
+  def parameterMap: Directive[Map[String, String] :: HNil] = ParameterDirectives._parameterMap
 
   /**
    * Extracts the requests query parameters as a Map[String, List[String]].
    */
-  def parameterMultiMap: Directive[Map[String, List[String]] :: HNil] =
-    BasicDirectives.extract(_.request.uri.query.toMultiMap)
+  def parameterMultiMap: Directive[Map[String, List[String]] :: HNil] = ParameterDirectives._parameterMultiMap
 
   /**
    * Extracts the requests query parameters as a Seq[(String, String)].
    */
-  def parameterSeq: Directive[Seq[(String, String)] :: HNil] =
-    BasicDirectives.extract(_.request.uri.query.toSeq)
+  def parameterSeq: Directive[Seq[(String, String)] :: HNil] = ParameterDirectives._parameterSeq
 
   /**
    * Rejects the request if the query parameter matcher(s) defined by the definition(s) don't match.
@@ -54,7 +51,18 @@ trait ParameterDirectives extends ToNameReceptaclePimps {
 
 }
 
-object ParameterDirectives extends ParameterDirectives
+object ParameterDirectives extends ParameterDirectives {
+  import BasicDirectives._
+
+  private val _parameterMap: Directive[Map[String, String] :: HNil] =
+    extract(_.request.uri.query.toMap)
+
+  private val _parameterMultiMap: Directive[Map[String, List[String]] :: HNil] =
+    extract(_.request.uri.query.toMultiMap)
+
+  private val _parameterSeq: Directive[Seq[(String, String)] :: HNil] =
+    extract(_.request.uri.query.toSeq)
+}
 
 trait ParamDefMagnet {
   type Out
@@ -71,21 +79,14 @@ trait ParamDefMagnet2[T] {
   type Out
   def apply(value: T): Out
 }
+
 object ParamDefMagnet2 {
-  implicit def apply[A, B](implicit pdma: ParamDefMagnetAux[A, B]) = new ParamDefMagnet2[A] {
-    type Out = B
-    def apply(value: A) = pdma(value)
-  }
-}
+  type ParamDefMagnetAux[A, B] = ParamDefMagnet2[A] { type Out = B }
+  def ParamDefMagnetAux[A, B](f: A ⇒ B) = new ParamDefMagnet2[A] { type Out = B; def apply(value: A) = f(value) }
 
-trait ParamDefMagnetAux[A, B] extends (A ⇒ B)
-
-object ParamDefMagnetAux {
   import spray.httpx.unmarshalling.{ FromStringOptionDeserializer ⇒ FSOD, _ }
   import BasicDirectives._
   import RouteDirectives._
-
-  def apply[A, B](f: A ⇒ B) = new ParamDefMagnetAux[A, B] { def apply(value: A) = f(value) }
 
   /************ "regular" parameter extraction ******************/
 

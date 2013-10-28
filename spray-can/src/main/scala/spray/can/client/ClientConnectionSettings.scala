@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011-2013 spray.io
+ * Copyright © 2011-2013 the spray project <http://spray.io>
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -21,24 +21,27 @@ import scala.concurrent.duration.Duration
 import akka.actor.ActorRefFactory
 import spray.can.parsing.ParserSettings
 import spray.util._
+import spray.http.HttpHeaders.`User-Agent`
 
 case class ClientConnectionSettings(
-    userAgentHeader: String,
+    userAgentHeader: Option[`User-Agent`],
     idleTimeout: Duration,
     requestTimeout: Duration,
     reapingCycle: Duration,
     responseChunkAggregationLimit: Int,
-    requestSizeHint: Int,
+    chunklessStreaming: Boolean,
+    requestHeaderSizeHint: Int,
+    maxEncryptionChunkSize: Int,
     connectingTimeout: Duration,
-    parserSettings: ParserSettings) {
+    parserSettings: ParserSettings,
+    proxySettings: Map[String, ProxySettings]) {
 
   requirePositive(idleTimeout)
   requirePositive(requestTimeout)
   requirePositive(reapingCycle)
-  require(0 <= responseChunkAggregationLimit && responseChunkAggregationLimit <= Int.MaxValue,
-    "response-chunk-aggregation-limit must be >= 0 and <= Int.MaxValue")
-  require(0 <= requestSizeHint && requestSizeHint <= Int.MaxValue,
-    "request-size-hint must be >= 0 and <= Int.MaxValue")
+  require(0 <= responseChunkAggregationLimit, "response-chunk-aggregation-limit must be >= 0")
+  require(0 < requestHeaderSizeHint, "request-size-hint must be > 0")
+  require(0 < maxEncryptionChunkSize, "max-encryption-chunk-size must be > 0")
   requirePositive(connectingTimeout)
 }
 
@@ -50,14 +53,17 @@ object ClientConnectionSettings extends SettingsCompanion[ClientConnectionSettin
           "Use Http.Connect(sslEncryption = true) to enable ssl encryption for a connection.")
 
     apply(
-      c getString "user-agent-header",
+      (c getString "user-agent-header" toOption).map(`User-Agent`(_)),
       c getDuration "idle-timeout",
       c getDuration "request-timeout",
       c getDuration "reaping-cycle",
-      c getBytes "response-chunk-aggregation-limit" toInt,
-      c getBytes "request-size-hint" toInt,
+      c getIntBytes "response-chunk-aggregation-limit",
+      c getBoolean "chunkless-streaming",
+      c getIntBytes "request-header-size-hint",
+      c getIntBytes "max-encryption-chunk-size",
       c getDuration "connecting-timeout",
-      ParserSettings fromSubConfig c.getConfig("parsing"))
+      ParserSettings fromSubConfig c.getConfig("parsing"),
+      ProxySettings fromSubConfig c.getConfig("proxy"))
   }
 
   def apply(optionalSettings: Option[ClientConnectionSettings])(implicit actorRefFactory: ActorRefFactory): ClientConnectionSettings =

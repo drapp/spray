@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011-2013 spray.io
+ * Copyright © 2011-2013 the spray project <http://spray.io>
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -70,4 +70,7 @@ object ContentTypes {
   val `text/plain` = ContentType(MediaTypes.`text/plain`)
   val `text/plain(UTF-8)` = ContentType(MediaTypes.`text/plain`, HttpCharsets.`UTF-8`)
   val `application/octet-stream` = ContentType(MediaTypes.`application/octet-stream`)
+
+  // used for explicitly suppressing the rendering of Content-Type headers on requests and responses
+  val NoContentType = ContentType(MediaTypes.NoMediaType)
 }

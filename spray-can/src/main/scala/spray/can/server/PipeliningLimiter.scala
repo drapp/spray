@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011-2013 spray.io
+ * Copyright © 2011-2013 the spray project <http://spray.io>
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -38,7 +38,7 @@ import RequestParsing._
  *     i.e. during the `eventPL` call in handleEvent the complete request is handled and already sent
  *     out so that the openRequests counter is never increased.
  */
-object PipeliningLimiter {
+private object PipeliningLimiter {
 
   def apply(pipeliningLimit: Int): PipelineStage =
     new PipelineStage {
@@ -49,25 +49,15 @@ object PipeliningLimiter {
           var parkedRequestParts = Queue.empty[Event]
           var openRequests = 0
 
-          val commandPipeline: CPL = {
-            case cmd @ ResponsePartRenderingContext(_: HttpMessageEnd, _, _, _, _) ⇒
-              openRequests -= 1
-              commandPL(cmd)
-              if (parkedRequestParts.nonEmpty) {
-                unparkOneRequest()
-                if (parkedRequestParts.isEmpty) commandPL(Tcp.ResumeReading)
-              }
-
-            case cmd ⇒ commandPL(cmd)
-          }
-
+          def commandPipeline: CPL = commandPL
           val eventPipeline: EPL = {
-            case ev @ HttpMessageStartEvent(part, _) ⇒ handleEvent(ev, part)
-            case ev @ Http.MessageEvent(part)        ⇒ handleEvent(ev, part)
+            case ev @ HttpMessageStartEvent(part, _) ⇒ handleRequestPart(ev, part)
+            case ev @ Http.MessageEvent(part)        ⇒ handleRequestPart(ev, part)
+            case ev: AckEventWithReceiver            ⇒ handleResponseAck(ev)
             case ev                                  ⇒ eventPL(ev)
           }
 
-          def handleEvent(ev: Event, part: HttpMessagePart): Unit =
+          def handleRequestPart(ev: Event, part: HttpMessagePart): Unit =
             if (openRequests < pipeliningLimit) {
               if (part.isInstanceOf[HttpMessageEnd]) openRequests += 1
               eventPL(ev)
@@ -75,6 +65,14 @@ object PipeliningLimiter {
               commandPL(Tcp.SuspendReading)
               parkedRequestParts = parkedRequestParts enqueue ev
             }
+          def handleResponseAck(ev: AckEventWithReceiver): Unit = {
+            openRequests -= 1
+            eventPL(ev)
+            if (parkedRequestParts.nonEmpty) {
+              unparkOneRequest()
+              if (parkedRequestParts.isEmpty) commandPL(Tcp.ResumeReading)
+            }
+          }
 
           @tailrec
           def unparkOneRequest(): Unit =

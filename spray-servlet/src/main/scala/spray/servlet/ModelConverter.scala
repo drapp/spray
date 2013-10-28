@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011-2013 spray.io
+ * Copyright © 2011-2013 the spray project <http://spray.io>
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -31,7 +31,7 @@ object ModelConverter {
 
   def toHttpRequest(hsRequest: HttpServletRequest)(implicit settings: ConnectorSettings, log: LoggingAdapter): HttpRequest = {
     val (errors, parsedHeaders) = HttpParser.parseHeaders(rawHeaders(hsRequest))
-    if (!errors.isEmpty) errors.foreach(e ⇒ log.warning(e.formatPretty))
+    if (errors.nonEmpty && settings.illegalHeaderWarnings) errors.foreach(e ⇒ log.warning(e.formatPretty))
     val contentType = parsedHeaders.collectFirst { case `Content-Type`(ct) ⇒ ct }
     HttpRequest(
       method = toHttpMethod(hsRequest.getMethod),
@@ -61,7 +61,7 @@ object ModelConverter {
   def rebuildUri(hsRequest: HttpServletRequest)(implicit settings: ConnectorSettings, log: LoggingAdapter): Uri = {
     val buffer = addQueryString(hsRequest, hsRequest.getRequestURL())
     try {
-      val uri = Uri(buffer.toString)
+      val uri = Uri(buffer.toString, settings.uriParsingMode)
       if (settings.rootPath.isEmpty) uri
       else if (uri.path.startsWith(settings.rootPath)) uri.copy(path = uri.path.dropChars(settings.rootPathCharCount))
       else {

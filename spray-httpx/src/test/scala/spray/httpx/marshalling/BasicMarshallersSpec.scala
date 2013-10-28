@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011-2013 spray.io
+ * Copyright © 2011-2013 the spray project <http://spray.io>
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -44,8 +44,8 @@ class BasicMarshallersSpec extends Specification {
 
   "The FormDataMarshaller" should {
     "properly marshal FormData instances to application/x-www-form-urlencoded entity bodies" in {
-      marshal(FormData(Map("name" -> "Bob", "pass" -> "x?!54", "admin" -> ""))) ===
-        Right(HttpEntity(ContentType(`application/x-www-form-urlencoded`, `UTF-8`), "name=Bob&pass=x%3F%2154&admin="))
+      marshal(FormData(Map("name" -> "Bob", "pass" -> "hällo", "admin" -> ""))) ===
+        Right(HttpEntity(ContentType(`application/x-www-form-urlencoded`, `UTF-8`), "name=Bob&pass=h%E4llo&admin="))
     }
   }
 
